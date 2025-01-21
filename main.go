@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/schollz/progressbar/v3"
 )
 
 type GetUsersPlaylists struct {
@@ -73,28 +75,36 @@ func getPlaylistItems(playlistId string, client *http.Client, token string) (int
 	return playlistItems.Total, nil
 }
 
-func shufflePlaylist(playlistId string, range_start int, insert_before int, client *http.Client, token string, ch chan<- string, track_num int, playlist_tracks int) {
+type Result struct {
+	position int
+	value    string
+}
+
+func shufflePlaylist(playlistId string, range_start int, insert_before int,
+	client *http.Client, token string, ch chan<- Result,
+	track_num int, playlist_tracks int) {
 	bearerToken := "Bearer " + token
 	data := fmt.Sprintf(`{"insert_before":%d, "range_start":%d}`, insert_before, range_start)
 	url := fmt.Sprintf("https://api.spotify.com/v1/playlists/%s/tracks", playlistId)
 	req, err := http.NewRequest("PUT", url, strings.NewReader(data))
 	if err != nil {
-		ch <- fmt.Sprintf("Error creating request for index %d: %v", range_start, err)
+		ch <- Result{track_num, fmt.Sprintf("Error creating request for index %d: %v", range_start, err)}
 		return
 	}
 	req.Header.Add("Authorization", bearerToken)
 	req.Header.Add("Content-Type", "application/json")
-
 	resp, err := client.Do(req)
 	if err != nil {
-		ch <- fmt.Sprintf("Error shuffling index %d: %v", range_start, err)
+		ch <- Result{track_num, fmt.Sprintf("Error shuffling index %d: %v", range_start, err)}
 		return
 	}
 	defer resp.Body.Close()
 
 	percent_done := (float64(track_num) / float64(playlist_tracks)) * 100
-
-	ch <- fmt.Sprintf("%.2f", percent_done)
+	ch <- Result{
+		position: track_num,
+		value:    fmt.Sprintf("%.2f", percent_done),
+	}
 }
 
 func main() {
@@ -146,10 +156,46 @@ func main() {
 				return
 			}
 
-			ch := make(chan string, totalTracks)
+			bar := progressbar.NewOptions64(
+				int64(totalTracks),
+				progressbar.OptionSetDescription("Shuffling"),
+				progressbar.OptionShowCount(),
+				progressbar.OptionShowIts(),
+				progressbar.OptionOnCompletion(func() {
+					fmt.Fprint(os.Stderr, "\n")
+				}),
+			)
+
+			ch := make(chan Result, totalTracks)
+			printCh := make(chan string, totalTracks)
 			var wg sync.WaitGroup
 
 			rateLimiter := time.Tick(time.Minute / 160)
+
+			go func() {
+				nextPosition := 1
+				pending := make(map[int]string)
+
+				for result := range ch {
+					if result.position == nextPosition {
+						printCh <- result.value
+						nextPosition++
+
+						for {
+							if value, exists := pending[nextPosition]; exists {
+								printCh <- value
+								delete(pending, nextPosition)
+								nextPosition++
+							} else {
+								break
+							}
+						}
+					} else {
+						pending[result.position] = result.value
+					}
+				}
+				close(printCh)
+			}()
 
 			wg.Add(totalTracks)
 			for i, idx := range rand.Perm(totalTracks) {
@@ -166,8 +212,8 @@ func main() {
 				close(ch)
 			}()
 
-			for msg := range ch {
-				fmt.Println(msg)
+			for range printCh {
+				bar.Add64(1)
 			}
 
 			fmt.Println("Shuffling took:", time.Since(timer))
