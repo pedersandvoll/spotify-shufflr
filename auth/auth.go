@@ -6,13 +6,26 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/joho/godotenv"
 )
+
+func getDotEnvVariable(key string) string {
+	err := godotenv.Load(".env")
+	if err != nil {
+		log.Fatalf("Error loading .env file")
+	}
+
+	return os.Getenv(key)
+}
 
 func generateCodeVerifier() string {
 	b := make([]byte, 32)
@@ -44,7 +57,7 @@ func GetSpotifyUserAuth() (string, error) {
 		server.ListenAndServe()
 	}()
 
-	clientID := "dc1f50f63813449f907e16f94997ebab"
+	clientID := getDotEnvVariable("SPOTIFY_CLIENT_ID")
 	redirectURI := "http://localhost:8888/callback"
 	scope := "playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private"
 
@@ -84,8 +97,8 @@ func GetSpotifyUserAuth() (string, error) {
 }
 
 func exchangeCodeForToken(code string) (string, error) {
-	clientID := "dc1f50f63813449f907e16f94997ebab"
-	clientSecret := "5b7cb2eef8ca48e291e6f6f5e4f0e661"
+	clientID := getDotEnvVariable("SPOTIFY_CLIENT_ID")
+	clientSecret := getDotEnvVariable("SPOTIFY_CLIENT_SECRET")
 
 	data := url.Values{}
 	data.Set("grant_type", "authorization_code")
